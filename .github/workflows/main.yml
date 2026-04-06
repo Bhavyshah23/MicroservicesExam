@@ -1,0 +1,81 @@
+name: Deploy MERN App with Docker
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Checkout code
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # 2. Login to DockerHub
+    - name: Docker Login
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    # 3. Build & Push Frontend
+    - name: Build and Push Frontend
+      run: |
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/mern-frontend:latest ./frontend
+        docker push ${{ secrets.DOCKER_USERNAME }}/mern-frontend:latest
+
+    # 4. Build & Push Backend
+    - name: Build and Push Backend
+      run: |
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/mern-backend:latest ./backend
+        docker push ${{ secrets.DOCKER_USERNAME }}/mern-backend:latest
+
+    # 5. Deploy to EC2
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v0.1.10
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_KEY }}
+        script: |
+          # Stop old containers
+          docker stop frontend || true
+          docker stop backend || true
+          docker stop mongo || true
+
+          # Remove old containers
+          docker rm frontend || true
+          docker rm backend || true
+          docker rm mongo || true
+
+          # Create network
+          docker network create mern-net || true
+
+          # Pull latest images
+          docker pull ${{ secrets.DOCKER_USERNAME }}/mern-frontend:latest
+          docker pull ${{ secrets.DOCKER_USERNAME }}/mern-backend:latest
+
+          # Run MongoDB
+          docker run -d --name mongo \
+            --network mern-net \
+            --restart always \
+            mongo
+
+          # Wait for Mongo to start
+          sleep 10
+
+          # Run Backend
+          docker run -d --name backend \
+            --network mern-net \
+            --restart always \
+            -p 5000:5000 \
+            ${{ secrets.DOCKER_USERNAME }}/mern-backend:latest
+
+          # Run Frontend (IMPORTANT CHANGE HERE)
+          docker run -d --name frontend \
+            --restart always \
+            -p 3000:3000 \
+            ${{ secrets.DOCKER_USERNAME }}/mern-frontend:latest
